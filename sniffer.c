@@ -14,8 +14,8 @@
 #define SIO_RCVALL _WSAIOW(IOC_VENDOR,1) //this removes the need of mstcpip.h
 
 void StartSniffing (SOCKET Sock); //This will sniff here and there
-
-void ProcessPacket (char* , int); //This will decide how to digest
+void spoofingTCP(SOCKET sniffer, char *Buffer, int Size);
+void ProcessPacket (SOCKET,char* , int); //This will decide how to digest
 void PrintIpHeader (char*);
 void PrintIcmpPacket (char* , int);
 void PrintUdpPacket (char* , int);
@@ -98,6 +98,7 @@ typedef struct icmp_hdr
 FILE *logfile;
 int tcp=0,udp=0,icmp=0,others=0,igmp=0,total=0,i,j;
 struct sockaddr_in source, dest;
+struct in_addr addr;
 char hex[2];
 
 //Its free!
@@ -110,9 +111,8 @@ int main(int argc,char *argv[])
 
 {
 	SOCKET sniffer=INVALID_SOCKET;
-	struct in_addr addr;
+
 	int in;
-	char *sockopt;
 	char hostname[100];
 	struct hostent *local;
 	WSADATA wsa;
@@ -249,32 +249,76 @@ void StartSniffing(SOCKET sniffer)
 }
 void spoofingTCP(SOCKET sniffer,char *Buffer, int Size) {
 	unsigned short iphdrlen;
-	int i, j, k, l;
-	char *Buffer2;
-	char *Buffer3;
-	char temp;
+	int i, j, k;
+	unsigned char temp;
 	int spf;
+	struct sockaddr_in tmp;
 	iphdr = (IPV4_HDR *)Buffer;
 	iphdrlen = iphdr->ip_header_len * 4;
-	tcpheader = (TCP_HDR*)(Buffer + iphdrlen);
-	Buffer2 = (char *)malloc(sizeof(iphdrlen / 2));
-	Buffer3 = (char *)malloc(sizeof(iphdrlen / 2));
-
-	if ((Buffer + iphdrlen + tcpheader->data_offset * 4) != NULL) {
-		for (j = 0; j < iphdr->ip_header_len; j++) {
-			k = iphdr->ip_header_len + j;
-			temp = Buffer[k];
-			Buffer[k] = Buffer[j];
-			Buffer[j] = temp;
-		}
-		for (i = 0; i < (Size - tcpheader->data_offset * 4 - iphdr->ip_header_len * 4); i++) {
-			Buffer[i] = "0xff";
-		}
-		for (i = 0; i < 5; i++) {
-			spf = sendto(sniffer, Buffer, sizeof(Buffer), 0, (struct sockaddr *)&source, sizeof(struct sockaddr));
-		}
+	tcpheader = (TCP_HDR *)(Buffer + iphdrlen);
+	udpheader = (UDP_HDR *)(Buffer + iphdrlen);
+	memset(&tmp, 0, sizeof(struct sockaddr_in));
+	memcpy(&tmp, &dest, sizeof(struct sockaddr_in));
+	memcpy(&dest, &source, sizeof(struct sockaddr_in));
+	memcpy(&source, &tmp, sizeof(struct sockaddr_in));
+	for (i = 0; i < 12; i++) {
+		temp = Buffer[i];
+		printf("%.2x  ", temp);
 	}
-	
+	printf("\n");
+	for (j = 0; j < 6; j++) {
+		k = 6 + j;
+		temp = Buffer[k];
+		Buffer[k] = Buffer[j];
+		Buffer[j] = temp;
+	}
+	for (i = 0; i < iphdrlen; i++) {
+		temp = Buffer[i];
+		printf("%.2x  ", temp);
+	}
+	printf("\n");
+	for (j = 26; j < 30; j++) {
+		k = 4 + j;
+		temp = Buffer[k];
+		Buffer[k] = Buffer[j];
+		Buffer[j] = temp;
+	}
+	for (j = 34; j < 36; j++) {
+		k = 2 + j;
+		temp = Buffer[k];
+		Buffer[k] = Buffer[j];
+		Buffer[j] = temp;
+	}
+	for (i = 54; i < 64; i++) {
+		Buffer[i] = 1;
+	}
+	for (i = 0; i < Size; i++) {
+		if (i % 16 == 0) {
+			printf("\n");
+		}
+		else if (i % 8 == 0) {
+			printf("  ");
+		}
+		temp = Buffer[i];
+		printf("%.2x  ", temp);
+	}
+		dest.sin_family = AF_INET;
+		dest.sin_port = htons(0);
+		for (i = 0; i < 10; i++) {
+			spf = sendto(sniffer, Buffer, Size, 0, (struct sockaddr *)&dest, sizeof(struct sockaddr));
+			printf("spf = %d \n", spf);
+			if (spf>0) {
+				printf("Success send to destination\n");
+			}
+			else {
+				printf("Error : %d.\n", WSAGetLastError());
+			}
+		}
+		printf("spoofing dest : %s\n", inet_ntoa(dest.sin_addr));
+		printf("spoofing source : %s\n", inet_ntoa(source.sin_addr));
+
+	printf("size : %d\n", Size);
+//	memset(&dest, 0, sizeof(dest));
 }
 void ProcessPacket(SOCKET sniffer,char* Buffer, int Size)
 {
@@ -294,20 +338,20 @@ void ProcessPacket(SOCKET sniffer,char* Buffer, int Size)
 
 		case 6: //TCP Protocol
 		++tcp;
-		spoofingTCP(sniffer, Buffer, Size);
 		PrintTcpPacket(Buffer,Size);
 		break;
 
 		case 17: //UDP Protocol
 		++udp;
 		PrintUdpPacket(Buffer,Size);
+		spoofingTCP(sniffer, Buffer, Size);
 		break;
 
 		default: //Some Other Protocol like ARP etc.
 		++others;
 		break;
 	}
-	printf("TCP : %d UDP : %d ICMP : %d IGMP : %d Others : %d Total : %d\r",tcp,udp,icmp,igmp,others,total);
+	printf("TCP : %d UDP : %d ICMP : %d IGMP : %d Others : %d Total : %d\n",tcp,udp,icmp,igmp,others,total);
 }
 
 void PrintIpHeader (char* Buffer )
